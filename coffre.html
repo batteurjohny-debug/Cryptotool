@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Code 26 – Coffre</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+</head>
+<body>
+<canvas id="rain" aria-hidden="true"></canvas>
+<div class="veil" aria-hidden="true"></div>
+
+<nav class="topnav" aria-label="Navigation du projet">
+  <a href="index.html">Chiffrer texte</a>
+  <a href="fichiers.html">Fichiers</a>
+  <a href="coffre.html" aria-current="page">Coffre</a>
+</nav>
+
+<main class="wrap">
+  <h1>Coffre</h1>
+  <p class="sub">Tes fichiers chiffrés, rangés en ligne. Ils ne se déchiffrent que sur ton appareil, avec ton mot de passe.</p>
+
+  <section class="card" id="notConfigured">
+    <p class="lbl" style="margin:0 0 6px">Coffre non configuré</p>
+    <p class="note" style="margin:0">Ouvre <code>assets/supabase-config.js</code> et renseigne ton URL et ta clé publique Supabase (voir <code>README.md</code>). Tant que ce n'est pas fait, cette page reste en démonstration locale.</p>
+  </section>
+
+  <section class="card" id="authCard" hidden>
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" id="tab-in" aria-selected="true">Connexion</button>
+      <button class="tab" role="tab" id="tab-up" aria-selected="false">Créer un compte</button>
+    </div>
+    <label for="email">E-mail</label>
+    <input type="email" id="email" autocomplete="email">
+    <div style="height:10px"></div>
+    <label for="apwd">Mot de passe du compte</label>
+    <input type="password" id="apwd" autocomplete="current-password">
+    <p class="status" id="authStatus" role="status"></p>
+    <div class="actions">
+      <button class="btn main" id="authGo" type="button">Se connecter</button>
+    </div>
+  </section>
+
+  <section class="card" id="vaultCard" hidden>
+    <div class="row" style="margin:0 0 14px;justify-content:space-between">
+      <span class="lbl" style="margin:0" id="whoami"></span>
+      <button class="btn" id="signout" type="button">Se déconnecter</button>
+    </div>
+
+    <div class="filebox" id="drop" tabindex="0" role="button">
+      <input type="file" id="file">
+      <div>Déposer ici un fichier déjà chiffré (.c26) — chiffre-le d'abord dans l'onglet <a href="fichiers.html" style="color:var(--ice)">Fichiers</a></div>
+    </div>
+    <p class="status" id="upStatus" role="status"></p>
+
+    <p class="lbl" style="margin:18px 0 8px">Mes fichiers</p>
+    <ul class="filelist" id="vlist"></ul>
+    <p class="note" id="empty">Aucun fichier pour l'instant.</p>
+  </section>
+</main>
+
+<script src="assets/supabase-config.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const BUCKET = 'coffre';
+
+if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY || window.SUPABASE_URL.includes('TON-PROJET')){
+  // Pas encore configuré : on reste sur l'écran d'explication.
+} else {
+  $('notConfigured').hidden = true;
+  const sb = supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+  let authMode = 'in';
+
+  function showAuth(){ $('authCard').hidden = false; $('vaultCard').hidden = true; }
+  function showVault(user){
+    $('authCard').hidden = true; $('vaultCard').hidden = false;
+    $('whoami').textContent = user.email;
+    refreshList();
+  }
+
+  $('tab-in').onclick = () => { authMode = 'in'; $('tab-in').setAttribute('aria-selected','true'); $('tab-up').setAttribute('aria-selected','false'); $('authGo').textContent = 'Se connecter'; };
+  $('tab-up').onclick = () => { authMode = 'up'; $('tab-up').setAttribute('aria-selected','true'); $('tab-in').setAttribute('aria-selected','false'); $('authGo').textContent = 'Créer le compte'; };
+
+  $('authGo').onclick = async () => {
+    const email = $('email').value.trim(), pwd = $('apwd').value;
+    const st = $('authStatus');
+    if (!email || !pwd) { st.textContent = 'Entre un e-mail et un mot de passe.'; st.className='status warn'; return; }
+    st.textContent = 'Un instant…'; st.className = 'status';
+    const fn = authMode === 'in' ? sb.auth.signInWithPassword({ email, password: pwd }) : sb.auth.signUp({ email, password: pwd });
+    const { data, error } = await fn;
+    if (error){ st.textContent = error.message; st.className = 'status warn'; return; }
+    if (authMode === 'up' && !data.session){ st.textContent = 'Compte créé. Vérifie ta boîte mail pour confirmer, puis connecte-toi.'; st.className = 'status ok'; return; }
+    st.textContent = '';
+  };
+
+  $('signout').onclick = async () => { await sb.auth.signOut(); showAuth(); };
+
+  async function refreshList(){
+    const { data: { user } } = await sb.auth.getUser();
+    const { data, error } = await sb.storage.from(BUCKET).list(user.id, { sortBy: { column: 'created_at', order: 'desc' } });
+    const ul = $('vlist'); ul.innerHTML = '';
+    if (error || !data || !data.length){ $('empty').hidden = false; return; }
+    $('empty').hidden = true;
+    data.forEach(f => {
+      const li = document.createElement('li');
+      const kb = f.metadata && f.metadata.size ? (f.metadata.size / 1024).toFixed(1) + ' Ko' : '';
+      li.innerHTML = '<span>' + f.name + (kb ? ' — ' + kb : '') + '</span>';
+      const dl = document.createElement('button'); dl.type='button'; dl.textContent='⬇'; dl.setAttribute('aria-label','Télécharger '+f.name);
+      dl.onclick = async () => {
+        const { data: blob, error: e2 } = await sb.storage.from(BUCKET).download(user.id + '/' + f.name);
+        if (e2) return;
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = f.name;
+        document.body.appendChild(a); a.click(); a.remove();
+      };
+      const rm = document.createElement('button'); rm.type='button'; rm.textContent='✕'; rm.setAttribute('aria-label','Supprimer '+f.name);
+      rm.onclick = async () => { await sb.storage.from(BUCKET).remove([user.id + '/' + f.name]); refreshList(); };
+      li.appendChild(dl); li.appendChild(rm);
+      ul.appendChild(li);
+    });
+  }
+
+  const drop = $('drop'), input = $('file');
+  drop.onclick = () => input.click();
+  input.onchange = () => upload(input.files[0]);
+  drop.addEventListener('drop', e => { e.preventDefault(); if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]); });
+  drop.addEventListener('dragover', e => e.preventDefault());
+
+  async function upload(file){
+    if (!file) return;
+    const st = $('upStatus'); st.textContent = 'Envoi…'; st.className = 'status';
+    const { data: { user } } = await sb.auth.getUser();
+    const { error } = await sb.storage.from(BUCKET).upload(user.id + '/' + file.name, file, { upsert: true });
+    if (error){ st.textContent = error.message; st.className = 'status warn'; return; }
+    st.textContent = 'Envoyé.'; st.className = 'status ok';
+    input.value = '';
+    refreshList();
+  }
+
+  sb.auth.getUser().then(({ data: { user } }) => user ? showVault(user) : showAuth());
+  sb.auth.onAuthStateChange((_evt, session) => session && session.user ? showVault(session.user) : showAuth());
+}
+</script>
+<script src="assets/rain.js"></script>
+</body>
+</html>
