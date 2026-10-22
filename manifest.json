@@ -2,7 +2,7 @@
   "name": "Code 26 — Chiffrement",
   "short_name": "Code 26",
   "description": "Chiffrer et déchiffrer du texte et des fichiers, directement dans le navigateur.",
-  "start_url": "./index.html",
+  "start_url": "./Cryptotool",
   "scope": "./",
   "display": "standalone",
   "background_color": "#050b14",
