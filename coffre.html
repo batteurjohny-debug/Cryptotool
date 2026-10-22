@@ -45,11 +45,35 @@
     </div>
   </section>
 
-  <section class="card" id="vaultCard" hidden>
-    <div class="row" style="margin:0 0 14px;justify-content:space-between">
-      <span class="lbl" style="margin:0" id="whoami"></span>
+  <section class="card" id="profileCard" hidden>
+    <div class="row" style="margin:0;justify-content:space-between;align-items:flex-start">
+      <div class="profile-row">
+        <div class="avatar" id="avatar" role="button" tabindex="0" aria-label="Changer la photo de profil">
+          <span id="avatarInitial"></span>
+          <img id="avatarImg" hidden alt="">
+        </div>
+        <input type="file" id="avatarFile" accept="image/*" hidden>
+        <div>
+          <p class="profile-name" id="profName"></p>
+          <p class="profile-email" id="profEmail"></p>
+        </div>
+      </div>
       <button class="btn" id="signout" type="button">Se déconnecter</button>
     </div>
+
+    <div id="editProfile" hidden style="margin-top:16px">
+      <label for="nameInput">Nom affiché</label>
+      <input type="text" id="nameInput" maxlength="40">
+      <p class="status" id="profStatus" role="status"></p>
+      <div class="actions"><button class="btn main" id="saveName" type="button">Enregistrer</button></div>
+    </div>
+    <div class="actions" style="margin-top:12px">
+      <button class="btn" id="editToggle" type="button">Modifier le profil</button>
+    </div>
+  </section>
+
+  <section class="card" id="vaultCard" hidden>
+    <p class="lbl" style="margin:0 0 14px">Mes réalisations — les fichiers que tu as chiffrés et enregistrés ici</p>
 
     <div class="filebox" id="drop" tabindex="0" role="button">
       <input type="file" id="file">
@@ -73,14 +97,70 @@ if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY || window.SUPABASE_URL.inc
 } else {
   $('notConfigured').hidden = true;
   const sb = supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
-  let authMode = 'in';
+  let authMode = 'in', curUser = null;
+  const AVATAR_PREFIX = '_avatar';
 
-  function showAuth(){ $('authCard').hidden = false; $('vaultCard').hidden = true; }
-  function showVault(user){
-    $('authCard').hidden = true; $('vaultCard').hidden = false;
-    $('whoami').textContent = user.email;
+  function showAuth(){ $('authCard').hidden = false; $('profileCard').hidden = true; $('vaultCard').hidden = true; }
+
+  function defaultName(email){
+    const base = email.split('@')[0].replace(/[._\-]+/g, ' ').trim();
+    return base.split(' ').filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join(' ') || email;
+  }
+
+  async function showVault(user){
+    curUser = user;
+    $('authCard').hidden = true; $('profileCard').hidden = false; $('vaultCard').hidden = false;
+
+    let name = user.user_metadata && user.user_metadata.display_name;
+    if (!name){
+      name = defaultName(user.email);
+      sb.auth.updateUser({ data: { display_name: name } }).catch(() => {});
+    }
+    $('profName').textContent = name;
+    $('profEmail').textContent = user.email;
+    $('nameInput').value = name;
+    $('avatarInitial').textContent = name.trim()[0].toUpperCase();
+
+    loadAvatar();
     refreshList();
   }
+
+  async function loadAvatar(){
+    const ext = curUser.user_metadata && curUser.user_metadata.avatar_ext;
+    if (!ext){ $('avatarImg').hidden = true; $('avatarInitial').hidden = false; return; }
+    const { data, error } = await sb.storage.from(BUCKET).createSignedUrl(curUser.id + '/' + AVATAR_PREFIX + '.' + ext, 3600);
+    if (error || !data){ $('avatarImg').hidden = true; $('avatarInitial').hidden = false; return; }
+    $('avatarImg').src = data.signedUrl;
+    $('avatarImg').hidden = false;
+    $('avatarInitial').hidden = true;
+  }
+
+  $('avatar').onclick = () => $('avatarFile').click();
+  $('avatar').onkeydown = e => { if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); $('avatarFile').click(); } };
+  $('avatarFile').onchange = async () => {
+    const file = $('avatarFile').files[0];
+    if (!file) return;
+    const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
+    const { error } = await sb.storage.from(BUCKET).upload(curUser.id + '/' + AVATAR_PREFIX + '.' + ext, file, { upsert: true });
+    if (error) return;
+    await sb.auth.updateUser({ data: { avatar_ext: ext } });
+    const { data: { user } } = await sb.auth.getUser();
+    curUser = user;
+    loadAvatar();
+  };
+
+  $('editToggle').onclick = () => { $('editProfile').hidden = !$('editProfile').hidden; };
+  $('saveName').onclick = async () => {
+    const name = $('nameInput').value.trim();
+    const st = $('profStatus');
+    if (!name){ st.textContent = 'Le nom ne peut pas être vide.'; st.className = 'status warn'; return; }
+    const { error } = await sb.auth.updateUser({ data: { display_name: name } });
+    if (error){ st.textContent = error.message; st.className = 'status warn'; return; }
+    $('profName').textContent = name;
+    $('avatarInitial').textContent = name.trim()[0].toUpperCase();
+    st.textContent = 'Enregistré.'; st.className = 'status ok';
+    setTimeout(() => { st.textContent = ''; $('editProfile').hidden = true; }, 1200);
+  };
 
   $('tab-in').onclick = () => { authMode = 'in'; $('tab-in').setAttribute('aria-selected','true'); $('tab-up').setAttribute('aria-selected','false'); $('authGo').textContent = 'Se connecter'; };
   $('tab-up').onclick = () => { authMode = 'up'; $('tab-up').setAttribute('aria-selected','true'); $('tab-in').setAttribute('aria-selected','false'); $('authGo').textContent = 'Créer le compte'; };
@@ -101,9 +181,10 @@ if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY || window.SUPABASE_URL.inc
 
   async function refreshList(){
     const { data: { user } } = await sb.auth.getUser();
-    const { data, error } = await sb.storage.from(BUCKET).list(user.id, { sortBy: { column: 'created_at', order: 'desc' } });
+    const { data: raw, error } = await sb.storage.from(BUCKET).list(user.id, { sortBy: { column: 'created_at', order: 'desc' } });
+    const data = (raw || []).filter(f => !f.name.startsWith(AVATAR_PREFIX));
     const ul = $('vlist'); ul.innerHTML = '';
-    if (error || !data || !data.length){ $('empty').hidden = false; return; }
+    if (error || !data.length){ $('empty').hidden = false; return; }
     $('empty').hidden = true;
     data.forEach(f => {
       const li = document.createElement('li');
