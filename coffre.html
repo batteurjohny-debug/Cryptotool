@@ -85,6 +85,13 @@
     <ul class="filelist" id="vlist"></ul>
     <p class="note" id="empty">Aucun fichier pour l'instant.</p>
   </section>
+
+  <section class="card" id="journalCard" hidden>
+    <p class="lbl" style="margin:0 0 4px">Journal</p>
+    <p class="note" style="margin:0 0 14px">Ce que tu as fait ici, dans l'ordre. Personne — ni toi ni nous — ne peut modifier ou effacer ces lignes, pour qu'elles restent fiables.</p>
+    <ul class="filelist" id="jlist"></ul>
+    <p class="note" id="jempty" hidden>Rien à montrer pour l'instant.</p>
+  </section>
 </main>
 
 <script src="assets/supabase-config.js"></script>
@@ -100,7 +107,41 @@ if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY || window.SUPABASE_URL.inc
   let authMode = 'in', curUser = null;
   const AVATAR_PREFIX = '_avatar';
 
-  function showAuth(){ $('authCard').hidden = false; $('profileCard').hidden = true; $('vaultCard').hidden = true; }
+  const ACTION_LABELS = {
+    compte_cree: 'Compte créé',
+    connexion: 'Connexion',
+    deconnexion: 'Déconnexion',
+    profil_modifie: 'Nom du profil modifié',
+    avatar_modifie: 'Photo de profil changée',
+    fichier_ajoute: 'Fichier ajouté au Coffre',
+    fichier_supprime: 'Fichier supprimé du Coffre',
+    fichier_chiffre: 'Fichier chiffré',
+    fichier_dechiffre: 'Fichier déchiffré'
+  };
+  function logAction(action, detail, uidOverride){
+    const uid = uidOverride || (curUser && curUser.id);
+    if (!uid) return;
+    sb.from('actions_log').insert({ user_id: uid, action, detail: detail || null }).then(() => {}, () => {});
+  }
+  async function refreshJournal(){
+    const { data, error } = await sb.from('actions_log')
+      .select('action, detail, created_at')
+      .eq('user_id', curUser.id)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    const ul = $('jlist'); ul.innerHTML = '';
+    if (error || !data || !data.length){ $('jempty').hidden = false; return; }
+    $('jempty').hidden = true;
+    data.forEach(row => {
+      const li = document.createElement('li');
+      const when = new Date(row.created_at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' });
+      const label = ACTION_LABELS[row.action] || row.action;
+      li.innerHTML = '<span><b>' + label + '</b>' + (row.detail ? ' — ' + row.detail : '') + '<br><span style="color:var(--muted);font-size:.8rem">' + when + '</span></span>';
+      ul.appendChild(li);
+    });
+  }
+
+  function showAuth(){ $('authCard').hidden = false; $('profileCard').hidden = true; $('vaultCard').hidden = true; $('journalCard').hidden = true; }
 
   function defaultName(email){
     const base = email.split('@')[0].replace(/[._\-]+/g, ' ').trim();
@@ -109,7 +150,7 @@ if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY || window.SUPABASE_URL.inc
 
   async function showVault(user){
     curUser = user;
-    $('authCard').hidden = true; $('profileCard').hidden = false; $('vaultCard').hidden = false;
+    $('authCard').hidden = true; $('profileCard').hidden = false; $('vaultCard').hidden = false; $('journalCard').hidden = false;
 
     let name = user.user_metadata && user.user_metadata.display_name;
     if (!name){
@@ -123,6 +164,7 @@ if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY || window.SUPABASE_URL.inc
 
     loadAvatar();
     refreshList();
+    refreshJournal();
   }
 
   async function loadAvatar(){
@@ -147,6 +189,8 @@ if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY || window.SUPABASE_URL.inc
     const { data: { user } } = await sb.auth.getUser();
     curUser = user;
     loadAvatar();
+    logAction('avatar_modifie');
+    refreshJournal();
   };
 
   $('editToggle').onclick = () => { $('editProfile').hidden = !$('editProfile').hidden; };
@@ -159,6 +203,8 @@ if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY || window.SUPABASE_URL.inc
     $('profName').textContent = name;
     $('avatarInitial').textContent = name.trim()[0].toUpperCase();
     st.textContent = 'Enregistré.'; st.className = 'status ok';
+    logAction('profil_modifie', name);
+    refreshJournal();
     setTimeout(() => { st.textContent = ''; $('editProfile').hidden = true; }, 1200);
   };
 
@@ -174,10 +220,11 @@ if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY || window.SUPABASE_URL.inc
     const { data, error } = await fn;
     if (error){ st.textContent = error.message; st.className = 'status warn'; return; }
     if (authMode === 'up' && !data.session){ st.textContent = 'Compte créé. Vérifie ta boîte mail pour confirmer, puis connecte-toi.'; st.className = 'status ok'; return; }
+    if (data.user) logAction(authMode === 'up' ? 'compte_cree' : 'connexion', null, data.user.id);
     st.textContent = '';
   };
 
-  $('signout').onclick = async () => { await sb.auth.signOut(); showAuth(); };
+  $('signout').onclick = async () => { logAction('deconnexion'); await sb.auth.signOut(); showAuth(); };
 
   async function refreshList(){
     const { data: { user } } = await sb.auth.getUser();
@@ -198,7 +245,7 @@ if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY || window.SUPABASE_URL.inc
         document.body.appendChild(a); a.click(); a.remove();
       };
       const rm = document.createElement('button'); rm.type='button'; rm.textContent='✕'; rm.setAttribute('aria-label','Supprimer '+f.name);
-      rm.onclick = async () => { await sb.storage.from(BUCKET).remove([user.id + '/' + f.name]); refreshList(); };
+      rm.onclick = async () => { await sb.storage.from(BUCKET).remove([user.id + '/' + f.name]); logAction('fichier_supprime', f.name); refreshList(); refreshJournal(); };
       li.appendChild(dl); li.appendChild(rm);
       ul.appendChild(li);
     });
@@ -218,7 +265,9 @@ if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY || window.SUPABASE_URL.inc
     if (error){ st.textContent = error.message; st.className = 'status warn'; return; }
     st.textContent = 'Envoyé.'; st.className = 'status ok';
     input.value = '';
+    logAction('fichier_ajoute', file.name);
     refreshList();
+    refreshJournal();
   }
 
   sb.auth.getUser().then(({ data: { user } }) => user ? showVault(user) : showAuth());
