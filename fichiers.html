@@ -320,6 +320,13 @@ $('go').onclick = async () => {
         ? (recoverable ? await encryptFileRecoverable(f, pwd, recoveryPhrase) : await encryptFile(f, pwd))
         : await decryptFileAuto(f, pwd);
       download(r.name, r.buf);
+      if (sb && currentUser){
+        sb.from('actions_log').insert({
+          user_id: currentUser.id,
+          action: mode === 'enc' ? 'fichier_chiffre' : 'fichier_dechiffre',
+          detail: f.name + (recoverable ? ' (récupérable)' : '')
+        }).then(() => {}, () => {});
+      }
       if (mode === 'enc' && sb && currentUser){
         try {
           const { error } = await sb.storage.from(BUCKET).upload(
@@ -329,6 +336,7 @@ $('go').onclick = async () => {
           );
           if (error) throw error;
           cloudSent++;
+          sb.from('actions_log').insert({ user_id: currentUser.id, action: 'fichier_ajoute', detail: r.name }).then(() => {}, () => {});
         } catch (e2){ cloudFailed++; cloudErrorMsg = (e2 && (e2.message || e2.error_description || String(e2))) || 'erreur inconnue'; }
       }
     } catch (e){
