@@ -111,7 +111,7 @@ function setStatus(t, cls){
 }
 function download(name, buf){
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([buf]));
+  a.href = URL.createObjectURL(new Blob([buf], { type: 'application/octet-stream' }));
   a.download = name;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
