@@ -34,6 +34,10 @@
     <label for="inp" id="lbl-in">Message à chiffrer</label>
     <textarea id="inp" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
 
+    <label for="keyInp" style="margin-top:14px">Clé secrète (facultatif)</label>
+    <input type="text" id="keyInp" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="Laisse vide pour le code classique">
+    <p class="note" id="keyNote" style="margin:6px 2px 0">Sans clé, le code reste le code classique A1Z26 (facile à casser par n'importe qui). Avec une clé, seul celui qui la connaît peut déchiffrer.</p>
+
     <div class="row" id="sepRow">
       <span class="lbl" style="margin:0">Séparateur</span>
       <div class="seg" role="group" aria-label="Séparateur entre les nombres">
@@ -71,30 +75,46 @@ function clean(t){
   return t.replace(/œ/gi,'oe').replace(/æ/gi,'ae').replace(/ß/g,'ss')
     .normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
 }
-function encode(t, sep){
+function keyShifts(key){
+  const s = clean(key || '').split('').map(c => c.charCodeAt(0) - 64).filter(n => n >= 1 && n <= 26);
+  return s.length ? s : [0];
+}
+function encode(t, sep, key){
+  const shifts = keyShifts(key);
   const words = clean(t).split(/\s+/).filter(Boolean);
   const out = [], used = new Set();
-  let ignored = 0, count = 0;
+  let ignored = 0, count = 0, ki = 0;
   for (const w of words){
     const codes = [];
     for (const ch of w){
       const c = ch.charCodeAt(0);
-      if (c >= 65 && c <= 90){ codes.push(c - 64); used.add(c - 64); count++; }
-      else ignored++;
+      if (c >= 65 && c <= 90){
+        const base = c - 64;
+        const shift = shifts[ki % shifts.length]; ki++;
+        const val = ((base - 1 + shift) % 26 + 26) % 26 + 1;
+        codes.push(val); used.add(val); count++;
+      } else ignored++;
     }
     if (codes.length) out.push(codes.join(sep));
   }
   return { text: out.join(' / '), ignored, used, count, bad: [] };
 }
-function decode(t){
+function decode(t, key){
+  const shifts = keyShifts(key);
   const words = t.split(/\s*[\/|]\s*/).map(w => w.trim()).filter(Boolean);
   const used = new Set(), bad = [];
-  let count = 0;
+  let count = 0, ki = 0;
   const out = words.map(w => w.split(/[\s\-.,;:_]+/).filter(Boolean).map(tok => {
     if (/^\d{1,2}$/.test(tok)){
       const n = Number(tok);
-      if (n >= 1 && n <= 26){ used.add(n); count++; return String.fromCharCode(64 + n); }
+      if (n >= 1 && n <= 26){
+        const shift = shifts[ki % shifts.length]; ki++;
+        const base = (((n - 1 - shift) % 26) + 26) % 26 + 1;
+        used.add(n); count++;
+        return String.fromCharCode(64 + base);
+      }
     }
+    ki++;
     bad.push(tok);
     return '?';
   }).join(''));
@@ -104,7 +124,7 @@ function decode(t){
 
 let mode = 'enc', sep = '-';
 const vals = { enc: 'Attention', dec: '' };
-const inp = $('inp'), out = $('out'), statusEl = $('status');
+const inp = $('inp'), out = $('out'), statusEl = $('status'), keyInp = $('keyInp');
 let lastText = null;
 
 // Table de correspondance
@@ -117,7 +137,7 @@ for (let i = 1; i <= 26; i++){
 }
 
 function update(){
-  const r = mode === 'enc' ? encode(inp.value, sep) : decode(inp.value);
+  const r = mode === 'enc' ? encode(inp.value, sep, keyInp.value) : decode(inp.value, keyInp.value);
   out.textContent = r.text;
   if (r.text !== lastText){
     out.classList.remove('flash'); void out.offsetWidth; out.classList.add('flash');
@@ -137,6 +157,7 @@ function update(){
   } else {
     msg = r.count + (r.count > 1 ? ' lettres déchiffrées' : ' lettre déchiffrée');
   }
+  if (msg && keyInp.value.trim()) msg += ' · clé active';
   statusEl.textContent = msg;
   statusEl.classList.toggle('warn', warn);
 }
@@ -159,6 +180,7 @@ function setMode(m){
 $('tab-enc').onclick = () => { if (mode !== 'enc') setMode('enc'); };
 $('tab-dec').onclick = () => { if (mode !== 'dec') setMode('dec'); };
 inp.addEventListener('input', update);
+keyInp.addEventListener('input', update);
 
 document.querySelectorAll('.seg button').forEach(b => {
   b.onclick = () => {
