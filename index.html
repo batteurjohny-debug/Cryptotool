@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Code 26 – Chiffrer et déchiffrer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<canvas id="rain" aria-hidden="true"></canvas>
+<div class="veil" aria-hidden="true"></div>
+
+<nav class="topnav" aria-label="Navigation du projet">
+  <a href="index.html" aria-current="page">Chiffrer texte</a>
+  <a href="fichiers.html">Fichiers</a>
+  <a href="coffre.html">Coffre</a>
+</nav>
+
+<main class="wrap">
+  <h1>Code 26</h1>
+  <p class="sub">Chaque lettre devient un nombre. A = 1, B = 2 … Z = 26.</p>
+  <div id="demo" aria-hidden="true"></div>
+
+  <section class="card" aria-label="Chiffrer et déchiffrer">
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" id="tab-enc" aria-selected="true">Chiffrer</button>
+      <button class="tab" role="tab" id="tab-dec" aria-selected="false">Déchiffrer</button>
+      <button class="tab" role="tab" disabled title="Bientôt disponible">Fichiers (bientôt)</button>
+    </div>
+
+    <label for="inp" id="lbl-in">Message à chiffrer</label>
+    <textarea id="inp" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+
+    <div class="row" id="sepRow">
+      <span class="lbl" style="margin:0">Séparateur</span>
+      <div class="seg" role="group" aria-label="Séparateur entre les nombres">
+        <button type="button" data-sep="-" aria-pressed="true">Tiret</button>
+        <button type="button" data-sep=" " aria-pressed="false">Espace</button>
+        <button type="button" data-sep="." aria-pressed="false">Point</button>
+      </div>
+    </div>
+
+    <div class="lbl" id="lbl-out">Résultat chiffré</div>
+    <div class="out" id="out" aria-live="polite" aria-labelledby="lbl-out"></div>
+    <p class="status" id="status" role="status"></p>
+
+    <div class="actions">
+      <button class="btn main" id="copy" type="button">Copier le résultat</button>
+      <button class="btn" id="swap" type="button">Utiliser comme entrée</button>
+      <button class="btn" id="clear" type="button">Effacer</button>
+    </div>
+  </section>
+
+  <section class="card" aria-label="Table de correspondance">
+    <div class="lbl">Table de correspondance — les lettres utilisées s’allument</div>
+    <div class="table" id="table"></div>
+    <p class="note">Les mots sont séparés par « / ». Les accents sont retirés (é devient e).</p>
+  </section>
+
+  <p class="note">Ce code est un jeu d’apprentissage : n’importe qui peut le casser en quelques minutes. Le vrai chiffrement (AES) viendra dans une prochaine étape.</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+
+//CORE
+function clean(t){
+  return t.replace(/œ/gi,'oe').replace(/æ/gi,'ae').replace(/ß/g,'ss')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+}
+function encode(t, sep){
+  const words = clean(t).split(/\s+/).filter(Boolean);
+  const out = [], used = new Set();
+  let ignored = 0, count = 0;
+  for (const w of words){
+    const codes = [];
+    for (const ch of w){
+      const c = ch.charCodeAt(0);
+      if (c >= 65 && c <= 90){ codes.push(c - 64); used.add(c - 64); count++; }
+      else ignored++;
+    }
+    if (codes.length) out.push(codes.join(sep));
+  }
+  return { text: out.join(' / '), ignored, used, count, bad: [] };
+}
+function decode(t){
+  const words = t.split(/\s*[\/|]\s*/).map(w => w.trim()).filter(Boolean);
+  const used = new Set(), bad = [];
+  let count = 0;
+  const out = words.map(w => w.split(/[\s\-.,;:_]+/).filter(Boolean).map(tok => {
+    if (/^\d{1,2}$/.test(tok)){
+      const n = Number(tok);
+      if (n >= 1 && n <= 26){ used.add(n); count++; return String.fromCharCode(64 + n); }
+    }
+    bad.push(tok);
+    return '?';
+  }).join(''));
+  return { text: out.join(' '), ignored: 0, used, count, bad };
+}
+//ENDCORE
+
+let mode = 'enc', sep = '-';
+const vals = { enc: 'Attention', dec: '' };
+const inp = $('inp'), out = $('out'), statusEl = $('status');
+let lastText = null;
+
+// Table de correspondance
+const table = $('table');
+for (let i = 1; i <= 26; i++){
+  const d = document.createElement('div');
+  d.className = 'cell'; d.id = 'c' + i;
+  d.innerHTML = '<b>' + String.fromCharCode(64 + i) + '</b><span>' + i + '</span>';
+  table.appendChild(d);
+}
+
+function update(){
+  const r = mode === 'enc' ? encode(inp.value, sep) : decode(inp.value);
+  out.textContent = r.text;
+  if (r.text !== lastText){
+    out.classList.remove('flash'); void out.offsetWidth; out.classList.add('flash');
+    lastText = r.text;
+  }
+  for (let i = 1; i <= 26; i++) $('c' + i).classList.toggle('on', r.used.has(i));
+
+  let msg = '', warn = false;
+  if (!inp.value.trim()) msg = '';
+  else if (r.bad.length){
+    warn = true;
+    const list = [...new Set(r.bad)].slice(0, 4).join(', ');
+    msg = 'Valeur invalide : ' + list + '. Utilise des nombres de 1 à 26, séparés par un tiret, un espace ou un point.';
+  } else if (mode === 'enc'){
+    msg = r.count + (r.count > 1 ? ' lettres chiffrées' : ' lettre chiffrée');
+    if (r.ignored){ warn = true; msg += ' · ' + r.ignored + (r.ignored > 1 ? ' caractères ignorés' : ' caractère ignoré') + ' (chiffres, ponctuation)'; }
+  } else {
+    msg = r.count + (r.count > 1 ? ' lettres déchiffrées' : ' lettre déchiffrée');
+  }
+  statusEl.textContent = msg;
+  statusEl.classList.toggle('warn', warn);
+}
+
+function setMode(m){
+  vals[mode] = inp.value;
+  mode = m;
+  inp.value = vals[m];
+  const enc = m === 'enc';
+  $('tab-enc').setAttribute('aria-selected', enc);
+  $('tab-dec').setAttribute('aria-selected', !enc);
+  $('lbl-in').textContent = enc ? 'Message à chiffrer' : 'Chiffres à déchiffrer';
+  $('lbl-out').textContent = enc ? 'Résultat chiffré' : 'Message déchiffré';
+  inp.placeholder = enc ? 'Écris ton message ici…' : 'Exemple : 1-20-20-5-14-20-9-15-14';
+  $('sepRow').hidden = !enc;
+  lastText = null;
+  update();
+}
+
+$('tab-enc').onclick = () => { if (mode !== 'enc') setMode('enc'); };
+$('tab-dec').onclick = () => { if (mode !== 'dec') setMode('dec'); };
+inp.addEventListener('input', update);
+
+document.querySelectorAll('.seg button').forEach(b => {
+  b.onclick = () => {
+    sep = b.dataset.sep;
+    document.querySelectorAll('.seg button').forEach(x => x.setAttribute('aria-pressed', x === b));
+    update();
+  };
+});
+
+function flashStatus(t){
+  statusEl.classList.remove('warn');
+  statusEl.textContent = t;
+  setTimeout(update, 1500);
+}
+function copyText(t){
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(t);
+  return new Promise((res, rej) => {
+    const ta = document.createElement('textarea');
+    ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy') ? res() : rej(); } catch (e) { rej(); }
+    ta.remove();
+  });
+}
+$('copy').onclick = () => {
+  const t = out.textContent;
+  if (!t) return flashStatus('Rien à copier pour le moment.');
+  copyText(t).then(() => flashStatus('Copié.'), () => flashStatus('Copie impossible : sélectionne le texte à la main.'));
+};
+$('swap').onclick = () => {
+  const t = out.textContent;
+  if (!t) return flashStatus('Rien à utiliser pour le moment.');
+  const next = mode === 'enc' ? 'dec' : 'enc';
+  setMode(next);
+  inp.value = t; vals[next] = t;
+  update();
+};
+$('clear').onclick = () => { inp.value = ''; vals[mode] = ''; update(); inp.focus(); };
+
+// Démo d'arrivée : ATTENTION se transforme en nombres
+(function(){
+  const demo = $('demo'), word = 'ATTENTION';
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  [...word].forEach((ch, i) => {
+    const s = document.createElement('span');
+    s.className = 'dg';
+    s.innerHTML = '<b>' + ch + '</b><i>' + (ch.charCodeAt(0) - 64) + '</i>';
+    demo.appendChild(s);
+    if (reduce) s.classList.add('on');
+    else setTimeout(() => s.classList.add('on'), 700 + i * 120);
+  });
+})();
+
+setMode('enc');
+</script>
+<script src="assets/rain.js"></script>
+</body>
+</html>
