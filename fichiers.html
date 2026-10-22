@@ -8,7 +8,13 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/style.css">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#050b14">
+<link rel="apple-touch-icon" href="assets/icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"></script>
 </head>
 <body>
 <canvas id="rain" aria-hidden="true"></canvas>
@@ -36,6 +42,11 @@
       <div id="fb-hint">Touche ici, ou dépose un fichier</div>
     </div>
     <ul class="filelist" id="flist"></ul>
+
+    <label id="zipRow" style="display:flex;align-items:center;gap:10px;margin:14px 0 0;cursor:pointer" hidden>
+      <input type="checkbox" id="zipBundle" style="width:18px;height:18px;flex-shrink:0" checked>
+      <span>Regrouper ces fichiers en un seul .zip avant de chiffrer</span>
+    </label>
 
     <div class="row" style="margin-top:16px">
       <label for="pwd" class="lbl" id="pwdLbl" style="margin:0;flex-basis:100%">Mot de passe</label>
@@ -125,6 +136,7 @@ function renderList(){
     li.appendChild(b);
     ul.appendChild(li);
   });
+  $('zipRow').hidden = !(mode === 'enc' && files.length > 1);
 }
 
 const drop = $('drop'), input = $('file');
@@ -303,6 +315,28 @@ async function decryptFileAuto(file, secret){
   return decryptFile(file, secret);
 }
 
+// --- Regrouper/extraire (ZIP), avant/après chiffrement ---
+async function buildZip(fileList){
+  const entries = {};
+  for (const f of fileList) entries[f.name] = new Uint8Array(await f.arrayBuffer());
+  const zipped = fflate.zipSync(entries, { level: 6 });
+  const stamp = new Date().toISOString().slice(0, 10);
+  return new File([zipped], 'fichiers-' + stamp + '.zip', { type: 'application/zip' });
+}
+function extractZipAndDownload(buf){
+  let entries;
+  try { entries = fflate.unzipSync(buf); } catch (e){ return 0; }
+  let count = 0;
+  for (const name in entries){
+    if (name.endsWith('/')) continue; // dossier, rien à télécharger
+    const data = entries[name];
+    if (!data || !data.length) continue;
+    download(name, data);
+    count++;
+  }
+  return count;
+}
+
 $('go').onclick = async () => {
   const pwd = $('pwd').value;
   if (!files.length) return setStatus('Ajoute au moins un fichier.', 'warn');
@@ -311,15 +345,24 @@ $('go').onclick = async () => {
 
   const recoverable = mode === 'enc' && $('recoverable').checked;
   const recoveryPhrase = recoverable ? randomRecoveryKey() : null;
+  const zipBundle = mode === 'enc' && files.length > 1 && $('zipBundle').checked;
+
+  const toProcess = zipBundle ? [await buildZip(files)] : files;
+  let extracted = 0;
 
   const prog = $('prog'); prog.hidden = false; prog.value = 0;
   let done = 0, errors = [], cloudSent = 0, cloudFailed = 0, cloudErrorMsg = '';
-  for (const f of files){
+  for (const f of toProcess){
     try {
       const r = mode === 'enc'
         ? (recoverable ? await encryptFileRecoverable(f, pwd, recoveryPhrase) : await encryptFile(f, pwd))
         : await decryptFileAuto(f, pwd);
-      download(r.name, r.buf);
+      if (mode === 'dec' && r.name.toLowerCase().endsWith('.zip')){
+        const n = extractZipAndDownload(r.buf);
+        if (n > 0) extracted += n; else download(r.name, r.buf);
+      } else {
+        download(r.name, r.buf);
+      }
       if (sb && currentUser){
         sb.from('actions_log').insert({
           user_id: currentUser.id,
@@ -342,13 +385,15 @@ $('go').onclick = async () => {
     } catch (e){
       errors.push(f.name + (e.message === 'bad-password' ? ' (mot de passe incorrect, ou fichier abîmé)' : e.message === 'bad-format' ? ' (pas un fichier .c26 valide)' : ''));
     }
-    done++; prog.value = Math.round(done / files.length * 100);
+    done++; prog.value = Math.round(done / toProcess.length * 100);
   }
   prog.hidden = true;
   if (errors.length){
     setStatus('Échec pour : ' + errors.join(', '), 'warn');
   } else {
     let msg = mode === 'enc' ? 'Terminé : ' + done + ' fichier(s) chiffré(s) et téléchargé(s).' : 'Terminé : ' + done + ' fichier(s) déchiffré(s) et téléchargé(s).';
+    if (zipBundle) msg += ' ' + files.length + ' fichiers regroupés en un seul .zip avant chiffrement.';
+    if (extracted) msg += ' ' + extracted + ' fichier(s) extrait(s) du .zip.';
     if (mode === 'enc' && sb && currentUser){
       if (cloudSent) msg += ' ' + cloudSent + ' envoyé(s) dans ton Coffre.';
       if (cloudFailed) msg += ' ' + cloudFailed + ' non envoyé(s) au Coffre — erreur : ' + cloudErrorMsg;
@@ -375,5 +420,6 @@ function flashRecCopied(){
 setMode('enc');
 </script>
 <script src="assets/rain.js"></script>
+<script src="assets/register-sw.js"></script>
 </body>
 </html>
