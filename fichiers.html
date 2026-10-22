@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 </head>
 <body>
 <canvas id="rain" aria-hidden="true"></canvas>
@@ -21,7 +22,8 @@
 
 <main class="wrap">
   <h1>Fichiers</h1>
-  <p class="sub">Images, vidéos, documents. Tout se chiffre dans ton navigateur ; rien n'est envoyé nulle part ici.</p>
+  <p class="sub">Images, vidéos, documents. Chiffré dans ton navigateur ; rien n'est envoyé en clair nulle part.</p>
+  <p class="note" id="authBadge" hidden></p>
 
   <section class="card" aria-label="Chiffrer ou déchiffrer un fichier">
     <div class="tabs" role="tablist">
@@ -54,9 +56,31 @@
   <p class="note">Un fichier chiffré ici a l'extension <code>.c26</code>. Chiffrement : AES-256-GCM, clé dérivée du mot de passe par PBKDF2 (210 000 itérations). Rien ne quitte ton appareil.</p>
 </main>
 
+<script src="assets/supabase-config.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 let mode = 'enc', files = [];
+
+// Connexion Supabase (facultative) : si connecté, les fichiers chiffrés
+// partent aussi automatiquement dans le Coffre, en plus du téléchargement.
+const BUCKET = 'coffre';
+let sb = null, currentUser = null;
+if (window.SUPABASE_URL && window.SUPABASE_ANON_KEY && !window.SUPABASE_URL.includes('TON-PROJET')){
+  sb = supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+  const updateBadge = () => {
+    const el = $('authBadge');
+    el.hidden = false;
+    if (currentUser){
+      el.textContent = 'Connecté : ' + currentUser.email + ' — tes fichiers chiffrés sont aussi envoyés dans ton Coffre.';
+      el.className = 'note';
+    } else {
+      el.innerHTML = 'Non connecté — <a href="coffre.html" style="color:var(--ice)">connecte-toi dans Coffre</a> pour enregistrer automatiquement tes fichiers chiffrés en ligne.';
+      el.className = 'note';
+    }
+  };
+  sb.auth.getUser().then(({ data }) => { currentUser = data.user || null; updateBadge(); });
+  sb.auth.onAuthStateChange((_evt, session) => { currentUser = (session && session.user) || null; updateBadge(); });
+}
 
 function setMode(m){
   mode = m;
@@ -173,19 +197,38 @@ $('go').onclick = async () => {
   if (mode === 'enc' && pwd.length < 6) return setStatus('Mot de passe trop court (6 caractères minimum).', 'warn');
 
   const prog = $('prog'); prog.hidden = false; prog.value = 0;
-  let done = 0, errors = [];
+  let done = 0, errors = [], cloudSent = 0, cloudFailed = 0;
   for (const f of files){
     try {
       const r = mode === 'enc' ? await encryptFile(f, pwd) : await decryptFile(f, pwd);
       download(r.name, r.buf);
+      if (mode === 'enc' && sb && currentUser){
+        try {
+          const { error } = await sb.storage.from(BUCKET).upload(
+            currentUser.id + '/' + r.name,
+            new Blob([r.buf], { type: 'application/octet-stream' }),
+            { upsert: true }
+          );
+          if (error) throw error;
+          cloudSent++;
+        } catch (e2){ cloudFailed++; }
+      }
     } catch (e){
       errors.push(f.name + (e.message === 'bad-password' ? ' (mot de passe incorrect, ou fichier abîmé)' : e.message === 'bad-format' ? ' (pas un fichier .c26 valide)' : ''));
     }
     done++; prog.value = Math.round(done / files.length * 100);
   }
   prog.hidden = true;
-  if (errors.length) setStatus('Échec pour : ' + errors.join(', '), 'warn');
-  else setStatus(mode === 'enc' ? 'Terminé : ' + done + ' fichier(s) chiffré(s) et téléchargé(s).' : 'Terminé : ' + done + ' fichier(s) déchiffré(s) et téléchargé(s).', 'ok');
+  if (errors.length){
+    setStatus('Échec pour : ' + errors.join(', '), 'warn');
+  } else {
+    let msg = mode === 'enc' ? 'Terminé : ' + done + ' fichier(s) chiffré(s) et téléchargé(s).' : 'Terminé : ' + done + ' fichier(s) déchiffré(s) et téléchargé(s).';
+    if (mode === 'enc' && sb && currentUser){
+      if (cloudSent) msg += ' ' + cloudSent + ' envoyé(s) dans ton Coffre.';
+      if (cloudFailed) msg += ' ' + cloudFailed + ' non envoyé(s) au Coffre (réessaie, ou vérifie ta connexion).';
+    }
+    setStatus(msg, cloudFailed ? 'warn' : 'ok');
+  }
 };
 
 setMode('enc');
