@@ -38,11 +38,17 @@
     <ul class="filelist" id="flist"></ul>
 
     <div class="row" style="margin-top:16px">
-      <label for="pwd" class="lbl" style="margin:0;flex-basis:100%">Mot de passe</label>
+      <label for="pwd" class="lbl" id="pwdLbl" style="margin:0;flex-basis:100%">Mot de passe</label>
       <input type="password" id="pwd" autocomplete="off" style="flex:1;min-width:0">
       <button class="btn" id="showpwd" type="button" aria-pressed="false">Afficher</button>
     </div>
     <p class="note" id="pwdwarn" hidden>Mot de passe perdu = fichier perdu. Personne, pas même nous, ne peut le récupérer sans lui.</p>
+
+    <label id="recoverableRow" style="display:flex;align-items:center;gap:10px;margin:16px 0 0;cursor:pointer" hidden>
+      <input type="checkbox" id="recoverable" style="width:18px;height:18px;flex-shrink:0">
+      <span>Coffre récupérable — génère aussi une clé de secours</span>
+    </label>
+    <p class="note" id="recNote" hidden>Si tu oublies ton mot de passe, cette clé de secours permet quand même d'ouvrir le fichier. Elle n'est connue que de toi : on ne la garde pas, et personne — pas même nous — ne peut te la redonner si tu la perds aussi.</p>
 
     <progress id="prog" value="0" max="100" hidden></progress>
     <p class="status" id="status" role="status"></p>
@@ -53,7 +59,14 @@
     </div>
   </section>
 
-  <p class="note">Un fichier chiffré ici a l'extension <code>.c26</code>. Chiffrement : AES-256-GCM, clé dérivée du mot de passe par PBKDF2 (210 000 itérations). Rien ne quitte ton appareil.</p>
+  <section class="card" id="recoveryBox" hidden style="border-color:var(--amber)">
+    <p class="lbl" style="margin:0 0 8px;color:var(--amber)">⚠ Ta clé de secours — note-la maintenant</p>
+    <div class="out" id="recoveryPhrase" style="color:var(--amber);font-size:1.2rem;text-align:center;letter-spacing:.04em"></div>
+    <p class="note">Elle ne s'affichera plus jamais. Note-la hors ligne, séparément de ton mot de passe : elle ouvre le(s) fichier(s) de cet envoi même si tu oublies ce mot de passe.</p>
+    <div class="actions"><button class="btn main" id="copyRecovery" type="button">Copier la clé de secours</button></div>
+  </section>
+
+  <p class="note">Un fichier chiffré ici a l'extension <code>.c26</code>. Chiffrement : AES-256-GCM, clé dérivée du mot de passe (ou de la clé de secours) par PBKDF2 (210 000 itérations). Rien ne quitte ton appareil.</p>
 </main>
 
 <script src="assets/supabase-config.js"></script>
@@ -89,6 +102,10 @@ function setMode(m){
   $('fb-hint').textContent = m === 'enc' ? 'Touche ici, ou dépose un ou plusieurs fichiers' : 'Touche ici, ou dépose un ou plusieurs fichiers .c26';
   $('go').textContent = m === 'enc' ? 'Chiffrer et télécharger' : 'Déchiffrer et télécharger';
   $('pwdwarn').hidden = m !== 'enc';
+  $('pwdLbl').textContent = m === 'enc' ? 'Mot de passe' : 'Mot de passe (ou clé de secours)';
+  $('recoverableRow').hidden = m !== 'enc';
+  $('recNote').hidden = m !== 'enc';
+  $('recoveryBox').hidden = true;
   files = []; renderList();
   $('status').textContent = '';
 }
@@ -128,6 +145,16 @@ $('showpwd').onclick = () => {
 };
 $('clear').onclick = () => { files = []; renderList(); $('status').textContent = ''; };
 
+function copyText(t){
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(t);
+  return new Promise((res, rej) => {
+    const ta = document.createElement('textarea');
+    ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy') ? res() : rej(); } catch (e) { rej(); }
+    ta.remove();
+  });
+}
 function setStatus(t, cls){
   const s = $('status');
   s.textContent = t;
@@ -190,17 +217,108 @@ async function decryptFile(file, pwd){
   return { buf: new Uint8Array(plain), name };
 }
 
+// --- Coffre récupérable : le fichier s'ouvre avec le mot de passe OU la clé
+// de secours. On chiffre avec une clé aléatoire (DEK), qu'on enferme deux
+// fois : une fois avec le mot de passe, une fois avec la clé de secours.
+// Aucune des deux n'est jamais envoyée où que ce soit.
+const MAGIC2 = new TextEncoder().encode('C26F2');
+
+function randomRecoveryKey(){
+  const bytes = crypto.getRandomValues(new Uint8Array(12));
+  const hex = [...bytes].map(b => b.toString(16).padStart(2, '0').toUpperCase()).join('');
+  return hex.match(/.{1,4}/g).join('-');
+}
+function concatBytes(parts){
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(total);
+  let o = 0;
+  for (const p of parts){ out.set(p, o); o += p.length; }
+  return out;
+}
+async function wrapDek(dekRaw, secret){
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const wrapKey = await deriveKey(secret, salt, 'encrypt');
+  const wrapped = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, wrapKey, dekRaw));
+  return { salt, iv, wrapped };
+}
+async function unwrapDek(salt, iv, wrapped, secret){
+  const key = await deriveKey(secret, salt, 'decrypt');
+  return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, wrapped));
+}
+function u16(n){ const b = new Uint8Array(2); new DataView(b.buffer).setUint16(0, n); return b; }
+
+async function encryptFileRecoverable(file, pwd, recoveryPhrase){
+  const dek = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+  const dekRaw = new Uint8Array(await crypto.subtle.exportKey('raw', dek));
+  const wrapP = await wrapDek(dekRaw, pwd);
+  const wrapR = await wrapDek(dekRaw, recoveryPhrase);
+  const ivData = crypto.getRandomValues(new Uint8Array(12));
+  const nameBytes = new TextEncoder().encode(file.name);
+  const data = new Uint8Array(await file.arrayBuffer());
+  const cipher = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: ivData }, dek, data));
+
+  const out = concatBytes([
+    MAGIC2,
+    wrapP.salt, wrapP.iv, u16(wrapP.wrapped.length), wrapP.wrapped,
+    wrapR.salt, wrapR.iv, u16(wrapR.wrapped.length), wrapR.wrapped,
+    ivData, u16(nameBytes.length), nameBytes, cipher
+  ]);
+  return { buf: out, name: file.name + '.c26' };
+}
+
+async function decryptFileRecoverable(buf, secret){
+  let o = MAGIC2.length;
+  function readBranch(){
+    const salt = buf.slice(o, o + 16); o += 16;
+    const iv = buf.slice(o, o + 12); o += 12;
+    const len = new DataView(buf.buffer, buf.byteOffset + o, 2).getUint16(0); o += 2;
+    const wrapped = buf.slice(o, o + len); o += len;
+    return { salt, iv, wrapped };
+  }
+  const branchP = readBranch();
+  const branchR = readBranch();
+  const ivData = buf.slice(o, o + 12); o += 12;
+  const nameLen = new DataView(buf.buffer, buf.byteOffset + o, 2).getUint16(0); o += 2;
+  const name = new TextDecoder().decode(buf.slice(o, o + nameLen)); o += nameLen;
+  const cipher = buf.slice(o);
+
+  let dekRaw = null;
+  for (const branch of [branchP, branchR]){
+    try { dekRaw = await unwrapDek(branch.salt, branch.iv, branch.wrapped, secret); break; }
+    catch (e) { /* mauvaise branche, on essaie l'autre */ }
+  }
+  if (!dekRaw) throw new Error('bad-password');
+  const dek = await crypto.subtle.importKey('raw', dekRaw, 'AES-GCM', false, ['decrypt']);
+  let plain;
+  try { plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ivData }, dek, cipher); }
+  catch (e) { throw new Error('bad-password'); }
+  return { buf: new Uint8Array(plain), name };
+}
+
+// Point d'entrée unique pour déchiffrer : détecte le format automatiquement.
+async function decryptFileAuto(file, secret){
+  const buf = new Uint8Array(await file.arrayBuffer());
+  if (buf.slice(0, MAGIC2.length).every((b, i) => b === MAGIC2[i])) return decryptFileRecoverable(buf, secret);
+  return decryptFile(file, secret);
+}
+
 $('go').onclick = async () => {
   const pwd = $('pwd').value;
   if (!files.length) return setStatus('Ajoute au moins un fichier.', 'warn');
   if (!pwd) return setStatus('Entre un mot de passe.', 'warn');
   if (mode === 'enc' && pwd.length < 6) return setStatus('Mot de passe trop court (6 caractères minimum).', 'warn');
 
+  const recoverable = mode === 'enc' && $('recoverable').checked;
+  const recoveryPhrase = recoverable ? randomRecoveryKey() : null;
+
   const prog = $('prog'); prog.hidden = false; prog.value = 0;
   let done = 0, errors = [], cloudSent = 0, cloudFailed = 0, cloudErrorMsg = '';
   for (const f of files){
     try {
-      const r = mode === 'enc' ? await encryptFile(f, pwd) : await decryptFile(f, pwd);
+      const r = mode === 'enc'
+        ? (recoverable ? await encryptFileRecoverable(f, pwd, recoveryPhrase) : await encryptFile(f, pwd))
+        : await decryptFileAuto(f, pwd);
       download(r.name, r.buf);
       if (mode === 'enc' && sb && currentUser){
         try {
@@ -229,7 +347,22 @@ $('go').onclick = async () => {
     }
     setStatus(msg, cloudFailed ? 'warn' : 'ok');
   }
+  if (recoverable && done > errors.length){
+    $('recoveryPhrase').textContent = recoveryPhrase;
+    $('recoveryBox').hidden = false;
+  }
 };
+
+$('copyRecovery').onclick = () => {
+  const t = $('recoveryPhrase').textContent;
+  copyText(t).then(() => flashRecCopied(), () => {});
+};
+function flashRecCopied(){
+  const b = $('copyRecovery');
+  const old = b.textContent;
+  b.textContent = 'Copié.';
+  setTimeout(() => { b.textContent = old; }, 1500);
+}
 
 setMode('enc');
 </script>
