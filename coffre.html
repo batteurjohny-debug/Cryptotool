@@ -23,6 +23,7 @@
   <a href="index.html">Chiffrer texte</a>
   <a href="fichiers.html">Fichiers</a>
   <a href="coffre.html" aria-current="page">Coffre</a>
+  <a href="recuperation.html">Récupération</a>
 </nav>
 
 <main class="wrap">
@@ -121,7 +122,8 @@ if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY || window.SUPABASE_URL.inc
     fichier_ajoute: 'Fichier ajouté au Coffre',
     fichier_supprime: 'Fichier supprimé du Coffre',
     fichier_chiffre: 'Fichier chiffré',
-    fichier_dechiffre: 'Fichier déchiffré'
+    fichier_dechiffre: 'Fichier déchiffré',
+    consentement_recuperation: 'Consentement de récupération signé'
   };
   function logAction(action, detail, uidOverride){
     const uid = uidOverride || (curUser && curUser.id);
