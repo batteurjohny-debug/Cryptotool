@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Code 26 – Récupération</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#050b14">
+<link rel="apple-touch-icon" href="assets/icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+</head>
+<body>
+<canvas id="rain" aria-hidden="true"></canvas>
+<div class="veil" aria-hidden="true"></div>
+
+<nav class="topnav" aria-label="Navigation du projet">
+  <a href="index.html">Chiffrer texte</a>
+  <a href="fichiers.html">Fichiers</a>
+  <a href="coffre.html">Coffre</a>
+  <a href="recuperation.html" aria-current="page">Récupération</a>
+</nav>
+
+<main class="wrap">
+  <h1>Récupération</h1>
+  <p class="sub">Deux situations : un téléphone physiquement là, à l'écran cassé ou inaccessible — ou un téléphone perdu, à retrouver à distance avec son propre compte.</p>
+
+  <section class="card" aria-label="Écran de consentement">
+    <p class="lbl" style="margin:0 0 4px;font-size:1.1rem">1. Avant toute intervention — consentement</p>
+    <p class="note" style="margin:0 0 16px">À remplir avec le client présent, avant de toucher à son appareil. Rien ne commence sans cet accord, donné en personne.</p>
+
+    <label for="cliName">Nom du client</label>
+    <input type="text" id="cliName" autocomplete="off">
+
+    <p class="lbl" style="margin:16px 0 8px">Ce qui sera copié</p>
+    <div id="dataChecks" style="display:flex;flex-direction:column;gap:10px">
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer"><input type="checkbox" class="dchk" value="Photos et vidéos" style="width:18px;height:18px"><span>Photos et vidéos</span></label>
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer"><input type="checkbox" class="dchk" value="Contacts" style="width:18px;height:18px"><span>Contacts</span></label>
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer"><input type="checkbox" class="dchk" value="Messages" style="width:18px;height:18px"><span>Messages</span></label>
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer"><input type="checkbox" class="dchk" value="Applications" style="width:18px;height:18px"><span>Données d'applications</span></label>
+    </div>
+    <label for="cliOther" style="margin-top:12px">Autre chose à préciser (facultatif)</label>
+    <input type="text" id="cliOther" autocomplete="off" placeholder="Ex : seulement le dossier WhatsApp">
+
+    <div style="margin-top:18px;display:flex;flex-direction:column;gap:10px">
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">
+        <input type="checkbox" id="chkExplain" style="width:18px;height:18px;margin-top:2px">
+        <span>J'ai expliqué clairement au client ce qui sera copié et pourquoi, dans un langage qu'il comprend.</span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">
+        <input type="checkbox" id="chkPresent" style="width:18px;height:18px;margin-top:2px">
+        <span>Le client est présent, identifié, et donne son accord librement — personne ne le force.</span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">
+        <input type="checkbox" id="chkOwnPwd" style="width:18px;height:18px;margin-top:2px">
+        <span>Le client tapera lui-même son code de déverrouillage — jamais moi, jamais écrit ni mémorisé nulle part.</span>
+      </label>
+    </div>
+
+    <p class="status" id="consentStatus" role="status" style="margin-top:14px"></p>
+    <div class="actions">
+      <button class="btn main" id="confirmConsent" type="button">Confirmer et horodater</button>
+      <button class="btn" id="printConsent" type="button" hidden>Imprimer / enregistrer en PDF</button>
+    </div>
+
+    <div class="card" id="receipt" hidden style="margin-top:16px;border-color:var(--ice)">
+      <p class="lbl" style="margin:0 0 8px;color:var(--ice)">Accord enregistré</p>
+      <pre id="receiptText" style="white-space:pre-wrap;font-family:'JetBrains Mono',monospace;font-size:.9rem;color:var(--text);margin:0"></pre>
+    </div>
+  </section>
+
+  <section class="card" aria-label="Guide de récupération à distance">
+    <p class="lbl" style="margin:0 0 4px;font-size:1.1rem">2. Téléphone perdu — récupération à distance</p>
+    <p class="note" style="margin:0 0 16px">Fonctionne uniquement avec le compte Google ou Apple déjà utilisé sur ce téléphone. Aucun outil tiers, le nôtre inclus, ne peut l'ouvrir sans ce compte.</p>
+
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" id="tab-android" aria-selected="true">Android</button>
+      <button class="tab" role="tab" id="tab-ios" aria-selected="false">iPhone</button>
+    </div>
+
+    <div id="panel-android">
+      <ol style="padding-left:20px;line-height:1.9;color:var(--text)">
+        <li>Sur un autre appareil, va sur <a href="https://android.com/find" target="_blank" rel="noopener" style="color:var(--ice)">android.com/find</a> et connecte-toi avec le même compte Google que sur le téléphone perdu.</li>
+        <li><b>Localiser</b> : si le téléphone a du réseau, sa position s'affiche sur une carte.</li>
+        <li><b>Faire sonner</b> : utile s'il est juste égaré près de toi, même en mode silencieux.</li>
+        <li><b>Verrouiller</b> : affiche un message à l'écran (ex : « Si trouvé, appeler ce numéro »).</li>
+        <li><b>Récupérer d'abord, effacer ensuite</b> : si des sauvegardes existent (Google Photos, contacts synchronisés), restaure-les vers un nouveau téléphone <em>avant</em> d'effacer l'ancien.</li>
+        <li><b>Effacer à distance</b> en dernier recours, si le téléphone est perdu pour de bon ou volé. Le verrouillage FRP de Google empêche ensuite quiconque de le réactiver sans ton compte.</li>
+      </ol>
+    </div>
+    <div id="panel-ios" hidden>
+      <ol style="padding-left:20px;line-height:1.9;color:var(--text)">
+        <li>Sur un autre appareil, va sur <a href="https://icloud.com/find" target="_blank" rel="noopener" style="color:var(--ice)">icloud.com/find</a> et connecte-toi avec le même identifiant Apple.</li>
+        <li><b>Localiser</b> l'appareil sur la carte, si connecté.</li>
+        <li><b>Faire sonner</b>, même en silencieux.</li>
+        <li><b>Mode Perdu</b> : verrouille l'appareil et affiche un message de contact.</li>
+        <li><b>Récupérer d'abord</b> via une sauvegarde iCloud avant d'effacer, si tu veux garder les données.</li>
+        <li><b>Effacer l'iPhone</b> en dernier recours. Le Verrouillage d'activation empêche sa réactivation sans ton identifiant Apple.</li>
+      </ol>
+    </div>
+
+    <p class="note" style="margin-top:16px">Ces outils appartiennent à Google et à Apple ; cette page ne fait qu'expliquer comment les utiliser, elle ne les remplace pas et n'y a aucun accès.</p>
+  </section>
+</main>
+
+<script src="assets/supabase-config.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+
+// Onglets Android / iPhone
+$('tab-android').onclick = () => {
+  $('tab-android').setAttribute('aria-selected', 'true');
+  $('tab-ios').setAttribute('aria-selected', 'false');
+  $('panel-android').hidden = false; $('panel-ios').hidden = true;
+};
+$('tab-ios').onclick = () => {
+  $('tab-ios').setAttribute('aria-selected', 'true');
+  $('tab-android').setAttribute('aria-selected', 'false');
+  $('panel-ios').hidden = false; $('panel-android').hidden = true;
+};
+
+// Connexion Supabase facultative, pour garder une trace du consentement
+// dans le Journal si la personne qui intervient est connectée.
+let sb = null, currentUser = null;
+if (window.SUPABASE_URL && window.SUPABASE_ANON_KEY && !window.SUPABASE_URL.includes('TON-PROJET')){
+  sb = supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+  sb.auth.getUser().then(({ data }) => { currentUser = data.user || null; });
+  sb.auth.onAuthStateChange((_e, session) => { currentUser = (session && session.user) || null; });
+}
+
+$('confirmConsent').onclick = () => {
+  const name = $('cliName').value.trim();
+  const items = [...document.querySelectorAll('.dchk:checked')].map(c => c.value);
+  const other = $('cliOther').value.trim();
+  const st = $('consentStatus');
+
+  if (!name) { st.textContent = 'Indique le nom du client.'; st.className = 'status warn'; return; }
+  if (!items.length && !other) { st.textContent = 'Coche au moins une chose à copier, ou précise-la.'; st.className = 'status warn'; return; }
+  if (!$('chkExplain').checked || !$('chkPresent').checked || !$('chkOwnPwd').checked){
+    st.textContent = 'Les trois cases du bas doivent être cochées avant de continuer.'; st.className = 'status warn'; return;
+  }
+
+  const when = new Date().toLocaleString('fr-FR', { dateStyle: 'full', timeStyle: 'short' });
+  const list = items.concat(other ? [other] : []).join(', ');
+  const text =
+    'Accord de récupération — ' + when + '\n' +
+    'Client : ' + name + '\n' +
+    'Éléments à copier : ' + list + '\n' +
+    '— Explication donnée au client : oui\n' +
+    '— Client présent et accord libre : oui\n' +
+    '— Code tapé uniquement par le client : oui';
+
+  $('receiptText').textContent = text;
+  $('receipt').hidden = false;
+  $('printConsent').hidden = false;
+  st.textContent = 'Accord confirmé et horodaté ci-dessous.'; st.className = 'status ok';
+
+  if (sb && currentUser){
+    sb.from('actions_log').insert({
+      user_id: currentUser.id,
+      action: 'consentement_recuperation',
+      detail: name + ' — ' + list
+    }).then(() => {}, () => {});
+  }
+};
+
+$('printConsent').onclick = () => window.print();
+</script>
+<script src="assets/rain.js"></script>
+<script src="assets/register-sw.js"></script>
+</body>
+</html>
