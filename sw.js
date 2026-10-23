@@ -5,13 +5,14 @@
 // IMPORTANT : si tu modifies un fichier de la liste PRECACHE, change ce
 // numéro de version (ex: 'code26-v2'), sinon les téléphones garderont
 // l'ancienne version en cache.
-const CACHE_NAME = 'code26-v1';
+const CACHE_NAME = 'code26-v2';
 
 const PRECACHE = [
   './',
   'index.html',
   'fichiers.html',
   'coffre.html',
+  'recuperation.html',
   'manifest.json',
   'assets/style.css',
   'assets/rain.js',
